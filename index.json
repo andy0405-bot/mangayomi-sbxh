@@ -1,0 +1,24 @@
+[
+  {
+    "name": "SBXH9 만화 (실험)",
+    "id": 2841905963,
+    "baseUrl": "https://sbxh9.com",
+    "lang": "ko",
+    "typeSource": "single",
+    "iconUrl": "https://sbxh9.com/favicon.ico",
+    "dateFormat": "",
+    "dateFormatLocale": "ko_KR",
+    "isNsfw": true,
+    "hasCloudflare": true,
+    "sourceCodeUrl": "https://raw.githubusercontent.com/YOUR_GITHUB_USER/mangayomi-sbxh9/main/source.js",
+    "apiUrl": "",
+    "version": "0.1.0",
+    "isManga": true,
+    "itemType": 0,
+    "isFullData": false,
+    "appMinVerReq": "0.5.0",
+    "additionalParams": "",
+    "sourceCodeLanguage": 1,
+    "notes": "Offline-only prototype; full reader pages and live network not verified"
+  }
+]
