@@ -1,21 +1,30 @@
-/*
- * Mangayomi experimental JS extension: sbxh9 / manhwa
- * Based solely on user-supplied static HTML snapshots (2026-11-20).
- * UNVERIFIED against live site. The reader virtualizes 20 pages but HTML contains 2.
- * No bypass of access controls, no copying cookies or credentials.
- */
-const mangayomiSources = [{
-  name: "SBXH9 만화 (실험)", id: 2841905963,
-  baseUrl: "https://sbxh9.com", lang: "ko", typeSource: "single",
-  iconUrl: "https://sbxh9.com/favicon.ico", dateFormat: "", dateFormatLocale: "ko_KR",
-  isNsfw: true, hasCloudflare: true, sourceCodeUrl: "",
-  apiUrl: "", version: "0.1.0", isManga: true, itemType: 0,
-  isFullData: false, appMinVerReq: "0.5.0", additionalParams: "",
-  sourceCodeLanguage: 1, notes: "Offline-HTML prototype; live access and full chapter pages not verified"
-}];
+const mangayomiSources = [
+  {
+    "name": "SBXH9 만화 (실험)",
+    "id": 2841905963,
+    "baseUrl": "https://sbxh9.com",
+    "lang": "ko",
+    "typeSource": "single",
+    "iconUrl": "https://sbxh9.com/favicon.ico",
+    "dateFormat": "",
+    "dateFormatLocale": "ko_KR",
+    "isNsfw": true,
+    "hasCloudflare": true,
+    "sourceCodeUrl": "https://raw.githubusercontent.com/andy0405-bot/mangayomi-sbxh/main/source.js",
+    "apiUrl": "",
+    "version": "0.1.2",
+    "isManga": true,
+    "itemType": 0,
+    "isFullData": false,
+    "appMinVerReq": "0.5.0",
+    "additionalParams": "",
+    "sourceCodeLanguage": 1,
+    "notes": "정상 응답 또는 앱 WebView에서 전체 페이지 주소를 확인한 회차만 지원"
+  }
+];
 
 class DefaultExtension extends MProvider {
-  constructor() { super(); this.client = new Client(); }
+  constructor() { super(); this.client = new Client({useDartHttpClient: true}); }
   get base() { return (this.source && this.source.baseUrl) || "https://sbxh9.com"; }
   absolute(href) {
     if (!href) return "";
@@ -32,6 +41,7 @@ class DefaultExtension extends MProvider {
       "User-Agent": "Mozilla/5.0 (compatible; Mangayomi)",
       "Referer": this.base + "/"
     });
+    if (response.statusCode < 200 || response.statusCode >= 300) throw new Error("HTTP " + response.statusCode + " " + this.path(url));
     var html = response.body || "";
     if (!html || /(?:403 Forbidden|Access Denied|개발자 도구 차단)/i.test(html.substring(0, 1000))) {
       throw new Error("사이트 응답이 차단됐거나 비어 있음. 브라우저 HTML만으로 실접속은 확인되지 않음.");
@@ -46,7 +56,7 @@ class DefaultExtension extends MProvider {
     var list = [], seen = {};
     for (var i=0; i<cards.length; i++) {
       var card = cards[i];
-      var a = card.selectFirst("a.upd-allbtn") || card.selectFirst("a.upd-card-main");
+      var a = card.select("a.upd-allbtn")[0] || card.selectFirst("a.upd-card-main");
       var href = this.attr(a, "href");
       // Latest cards link directly to chapter; derive series path from chapter link.
       if (href && href.indexOf("/manhwa/") === 0 && href.split("/").length > 3)
@@ -90,7 +100,7 @@ class DefaultExtension extends MProvider {
     var d=await this.doc(path);
     var title=this.text(d.selectFirst("h1.hero-v2-title"));
     var cover=d.selectFirst('meta[property="og:image"]');
-    var intro=d.selectFirst(".hero-v2-description") || d.selectFirst(".hero-v2-synopsis");
+    var intro=d.select(".hero-v2-description")[0] || d.selectFirst(".hero-v2-synopsis");
     var author=d.selectFirst(".hero-v2-author");
     var genreEls=d.select(".hero-v2-tags a, .hero-v2-genres a, .hero-v2-genre a");
     var genres=[];
@@ -107,28 +117,131 @@ class DefaultExtension extends MProvider {
     if(!title) throw new Error("상세 페이지 제목 선택자를 찾지 못함 (구조 변경 또는 차단)");
     return {name:title,link:this.absolute(path),imageUrl:this.absolute(this.attr(cover,"content")),
       author:this.text(author),description:this.text(intro),genre:genres,
-      status: d.selectFirst(".pill-status.ongoing") ? 0 : 5, chapters:chapters};
+      status: d.select(".pill-status.ongoing").length ? 0 : 5, chapters:chapters};
   }
+  pageAddress(value, chapter) {
+    const ref = (value || "").trim();
+    if (!ref || /^[?#]/.test(ref) || /[\s\\]/.test(ref)) return "";
+    if (/^https?:\/\/[^/?#]+/i.test(ref)) return ref;
+    if (/^[a-z][\w+.-]*:/i.test(ref)) return "";
+    const origin = chapter.match(/^(https?:)\/\/[^/?#]+/i);
+    if (!origin) return "";
+    if (ref.startsWith("//")) return origin[1] + ref;
+    const basePath = chapter.slice(origin[0].length).split(/[?#]/)[0];
+    const path = ref.startsWith("/") ? ref : basePath.replace(/[^/]*$/, "") + ref;
+    const suffix = path.search(/[?#]/);
+    const parts = (suffix < 0 ? path : path.slice(0, suffix)).split("/");
+    const clean = [];
+    for (const part of parts.slice(1)) {
+      if (part === "..") clean.pop();
+      else if (part !== ".") clean.push(part);
+    }
+    return origin[0] + "/" + clean.join("/") + (suffix < 0 ? "" : path.slice(suffix));
+  }
+
   async getPageList(url) {
-    var d=await this.doc(url);
-    var images=d.select(".vw-imgs img.viewer-ratio-img");
-    var container=d.selectFirst(".vw-imgs");
-    var expected=Number(this.attr(container,"data-viewer-image-count")||0);
-    var pages=[], seen={};
-    for(var i=0;i<images.length;i++) {
-      var src=this.attr(images[i],"src") || this.attr(images[i],"data-src");
-      if (!src || seen[src]) continue;
-      seen[src]=true;
-      pages.push({url:this.absolute(src),headers:{"Referer":this.base+"/"}});
+    const chapter = this.absolute(url);
+    const doc = await this.doc(chapter);
+    const container = doc.select(".vw-imgs")[0];
+    const expected = Number(this.attr(container, "data-viewer-image-count"));
+    const pages = new Set();
+    let missing = false;
+    for (const img of doc.select(".vw-imgs img.viewer-ratio-img")) {
+      const address = this.pageAddress(this.attr(img, "data-src"), chapter)
+        || this.pageAddress(this.attr(img, "src"), chapter);
+      if (address) pages.add(address);
+      else missing = true;
     }
-    // Most important: do NOT show a chapter as complete when only first two
-    // virtualized images were delivered in HTML.
-    if(expected>pages.length) {
-      throw new Error("이 사이트는 이미지를 가상 렌더링함: HTML "+pages.length+"장 / 전체 "+expected+"장. 전체 회차 이미지 API 미확인.");
+    const asPages = urls => urls.map(url => ({url, headers: {Referer: this.base + "/"}}));
+    if (pages.size && !missing && (expected ? pages.size === expected : this.attr(container, "data-viewer-virtualized") !== "1")) {
+      return asPages(Array.from(pages));
     }
-    if(!pages.length) throw new Error("이미지 URL을 찾지 못함. 뷰어 또는 접근 제한 확인 필요.");
-    return pages;
+
+    if (!container && !doc.select(".vw-root .viewer-loading").length) {
+      throw new Error("회차 본문 뷰어를 찾지 못했어. 페이지 형식 또는 접근 상태를 확인해 줘.");
+    }
+    // Use the site's normal reader. No private APIs, session export or script modification.
+    const script = "(" + readerScript + ")(" + JSON.stringify(chapter) + ")";
+    const result = await evaluateJavascriptViaWebview(chapter, {}, [script], 95);
+    if (!result) throw new Error("앱 WebView에서 회차 이미지 목록을 받지 못했어.");
+    const data = JSON.parse(result);
+    if (data.error) throw new Error(data.error);
+    if (!Array.isArray(data.urls) || !data.urls.length ||
+        data.urls.some(address => typeof address !== "string" || !/^https?:\/\//i.test(address)) ||
+        new Set(data.urls).size !== data.urls.length) {
+      throw new Error("WebView가 유효한 회차 이미지 목록을 반환하지 않았어.");
+    }
+    return asPages(data.urls);
   }
   getFilterList() { return []; }
   getSourcePreferences() { return []; }
 }
+
+
+const readerScript = String.raw`function readRenderedChapter(chapter) {
+  const send = value => window.flutter_inappwebview.callHandler("setResponse", JSON.stringify(value));
+  const deadline = Date.now() + 80000;
+  const urls = new Map();
+  let expected = 0;
+  let started = false;
+  function collect() {
+    const target = new URL(chapter);
+    if (location.origin !== target.origin || location.pathname !== target.pathname) {
+      send({error: "회차 URL이 다른 페이지로 이동했어."});
+      return;
+    }
+    const viewer = document.querySelector(".vw-imgs");
+    if (viewer) {
+      expected = Number(viewer.getAttribute("data-viewer-image-count"));
+      const images = Array.from(viewer.querySelectorAll("img.viewer-ratio-img"));
+      const numbered = [];
+      for (const img of images) {
+        const match = /^page\s+(\d+)$/i.exec(img.alt.trim());
+        if (!match) continue;
+        const n = Number(match[1]);
+        if (n < 1 || n > expected) continue;
+        numbered.push(n);
+        // A lazy img can have a valid address before the browser decodes the pixels.
+        for (const raw of [img.getAttribute("data-src"), img.currentSrc, img.getAttribute("src")]) {
+          if (!raw || !raw.trim() || /^[?#]/.test(raw.trim())) continue;
+          try {
+            const address = new URL(raw, document.baseURI);
+            if (/^https?:$/.test(address.protocol)) {
+              urls.set(n, address.href);
+              break;
+            }
+          } catch (_) { /* Try the next DOM attribute. */ }
+        }
+      }
+      if (expected > 0 && urls.size === expected) {
+        const pages = Array.from({length: expected}, (_, i) => urls.get(i + 1));
+        if (pages.every(Boolean)) {
+          send({urls: pages});
+          return;
+        }
+      }
+      if (!started) {
+        viewer.scrollIntoView({block: "start"});
+        started = true;
+      } else if (numbered.length) {
+        let next = 1;
+        while (urls.has(next)) next++;
+        // An unmounted gap may lie above the current viewport. Walk back to it.
+        const direction = next < Math.min(...numbered) ? -1 : 1;
+        if (!numbered.includes(next)) {
+          window.scrollBy(0, direction * Math.max(1, Math.round(window.innerHeight * 0.8)));
+        } else {
+          const waiting = images.find(img => img.alt.trim().toLowerCase() === "page " + next);
+          if (waiting) waiting.scrollIntoView({block: "center"});
+        }
+      }
+    }
+    if (Date.now() >= deadline) {
+      send({error: "앱 WebView에서 확인한 회차 이미지 " + urls.size + "/" +
+        (expected || "?") + "장. 일반 웹뷰에서 회차 표시 상태를 확인해 줘."});
+      return;
+    }
+    setTimeout(collect, 200);
+  }
+  collect();
+}`;

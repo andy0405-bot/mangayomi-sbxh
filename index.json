@@ -12,13 +12,13 @@
     "hasCloudflare": true,
     "sourceCodeUrl": "https://raw.githubusercontent.com/andy0405-bot/mangayomi-sbxh/main/source.js",
     "apiUrl": "",
-    "version": "0.1.0",
+    "version": "0.1.2",
     "isManga": true,
     "itemType": 0,
     "isFullData": false,
     "appMinVerReq": "0.5.0",
     "additionalParams": "",
     "sourceCodeLanguage": 1,
-    "notes": "Offline-only prototype; full reader pages and live network not verified"
+    "notes": "정상 응답 또는 앱 WebView에서 전체 페이지 주소를 확인한 회차만 지원"
   }
 ]
