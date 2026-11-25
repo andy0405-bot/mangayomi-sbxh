@@ -12,7 +12,7 @@ const mangayomiSources = [
     "hasCloudflare": true,
     "sourceCodeUrl": "https://raw.githubusercontent.com/andy0405-bot/mangayomi-sbxh/main/source.js",
     "apiUrl": "",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "isManga": true,
     "itemType": 0,
     "isFullData": false,
@@ -50,31 +50,50 @@ class DefaultExtension extends MProvider {
   }
   text(el) { return el ? String(el.text || "").trim() : ""; }
   attr(el, key) { return el ? String(el.attr(key) || "") : ""; }
-  async listing(path, selector) {
-    var d = await this.doc(path);
-    var cards = d.select(selector);
-    var list = [], seen = {};
-    for (var i=0; i<cards.length; i++) {
-      var card = cards[i];
-      var a = card.select("a.upd-allbtn")[0] || card.selectFirst("a.upd-card-main");
-      var href = this.attr(a, "href");
-      // Latest cards link directly to chapter; derive series path from chapter link.
-      if (href && href.indexOf("/manhwa/") === 0 && href.split("/").length > 3)
-        href = href.substring(0, href.lastIndexOf("/"));
-      var name = this.text(card.selectFirst(".upd-title"));
-      var img = card.selectFirst(".upd-thumb img");
-      var link = this.absolute(href);
-      if (!name || !href || seen[link]) continue;
-      seen[link]=true;
-      list.push({name: name, link: link, imageUrl: this.absolute(this.attr(img,"src"))});
+  async listing(page, byEpisode) {
+    const doc = await this.doc("/manhwa/updates" + (page === 1 ? "" : "?page=" + page));
+    const pager = doc.select(".upd-pager")[0];
+    const active = pager && Number(this.text(pager.selectFirst(".is-active")));
+    if (page > 1 && active !== page) return {list: [], hasNextPage: false};
+    const hasNextPage = !!pager && pager.select('button[aria-label="끝 페이지"]:not([disabled])').length > 0;
+    const list = [], seen = new Set(), times = {};
+    for (const card of doc.select("li.upd-card")) {
+      const episode = this.attr(card.selectFirst("a.upd-card-main"), "href");
+      const series = this.attr(card.selectFirst("a.upd-allbtn"), "href") ||
+        episode.replace(/^(\/manhwa\/[^/]+)\/[^/]+$/, "$1");
+      const name = this.text(card.selectFirst(".upd-title"));
+      if (!series || !name) continue;
+      const clock = card.selectFirst("time.upd-thumb-time");
+      const iso = this.attr(clock, "datetime") || this.attr(clock, "title");
+      const label = this.text(clock);
+      if (episode && /^\d\d\/\d\d \d\d:\d\d$/.test(label) && Number.isFinite(Date.parse(iso))) {
+        times[episode] = [String(Date.parse(iso)), label];
+      }
+      const key = byEpisode ? episode || series : series;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push({name, link: this.absolute(series),
+        imageUrl: this.absolute(this.attr(card.selectFirst(".upd-thumb img"), "src"))});
     }
-    return {list: list, hasNextPage: false}; // Pagination not verified in snapshot.
+    if (Object.keys(times).length) {
+      new SharedPreferences().setString("updates-v1-" + ((page - 1) % 10), JSON.stringify(times));
+    }
+    return {list, hasNextPage: !!list.length && hasNextPage};
   }
-  async getPopular(page) {
-    if (page > 1) return {list:[],hasNextPage:false};
-    return await this.listing("/manhwa/updates", "li.upd-card");
+  getPopular(page) { return this.listing(page, false); }
+  getLatestUpdates(page) { return this.listing(page, true); }
+
+  recentUploadTimes() {
+    // One snapshot per recently browsed listing page, scoped by the app to this source.
+    const prefs = new SharedPreferences(), times = {};
+    for (let i = 0; i < 10; i++) {
+      const saved = prefs.getString("updates-v1-" + i, "");
+      if (saved) {
+        try { Object.assign(times, JSON.parse(saved)); } catch (_) { /* Old cache entry */ }
+      }
+    }
+    return times;
   }
-  async getLatestUpdates(page) { return await this.getPopular(page); }
   async search(query, page, filters) {
     if (page > 1) return {list:[],hasNextPage:false};
     // Search HTML was not part of the supplied snapshots; do not claim supported.
@@ -106,13 +125,26 @@ class DefaultExtension extends MProvider {
     var genres=[];
     for (var i=0;i<genreEls.length;i++) { var g=this.text(genreEls[i]); if(g) genres.push(g.replace(/^#/,"")); }
     var rows=d.select("li.ep-row-v2 a.ep-row-v2-link");
+    const times = this.recentUploadTimes();
     var chapters=[],seen={};
     for(var j=0;j<rows.length;j++) {
       var row=rows[j],href=this.attr(row,"href");
       if(!href || seen[href]) continue;
       seen[href]=true;
       var name=this.text(row.selectFirst(".ep-row-v2-title strong")) || this.text(row.selectFirst(".ep-row-v2-title"));
-      chapters.push({name:name||("회차 "+(j+1)),url:this.absolute(href)});
+      const chapter = {name:name||("회차 "+(j+1)),url:this.absolute(href)};
+      const upload = times[href];
+      if (upload) {
+        chapter.dateUpload = upload[0];
+        chapter.scanlator = "업로드 " + upload[1];
+      } else {
+        const day = /^(\d{2})\.(\d{2})\.(\d{2})$/.exec(this.text(row.selectFirst(".ep-row-v2-date")));
+        if (day) {
+          const stamp = Date.parse("20"+day[1]+"-"+day[2]+"-"+day[3]+"T00:00:00+09:00");
+          if (Number.isFinite(stamp)) chapter.dateUpload = String(stamp);
+        }
+      }
+      chapters.push(chapter);
     }
     if(!title) throw new Error("상세 페이지 제목 선택자를 찾지 못함 (구조 변경 또는 차단)");
     return {name:title,link:this.absolute(path),imageUrl:this.absolute(this.attr(cover,"content")),
