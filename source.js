@@ -12,7 +12,7 @@ const mangayomiSources = [
     "hasCloudflare": true,
     "sourceCodeUrl": "https://raw.githubusercontent.com/andy0405-bot/mangayomi-sbxh/main/source.js",
     "apiUrl": "",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "isManga": true,
     "itemType": 0,
     "isFullData": false,
@@ -111,6 +111,62 @@ class DefaultExtension extends MProvider {
     }
     return {list:list,hasNextPage:false};
   }
+  async allChapterRows(path, firstDocument) {
+    let doc = firstDocument, page = 1;
+    const rows = [], seen = new Set(), unavailable = new Set();
+    const countText = this.text(doc.selectFirst(".ep-section-count")).replace(/,/g, "");
+    const countMatch = /(\d+)/.exec(countText);
+    const expected = countMatch ? Number(countMatch[1]) : null;
+    while (true) {
+      const pager = doc.select(".episode-pager")[0];
+      if (pager && Number(this.text(pager.selectFirst(".is-active"))) !== page) {
+        throw new Error("회차 페이지 응답 불일치: 요청 " + page + "페이지.");
+      }
+      const before = rows.length + unavailable.size;
+      for (const item of doc.select("li.ep-row-v2")) {
+        if (item.select("a.ep-row-v2-link").length || !item.select(".ep-row-v2-link.is-disabled").length) continue;
+        const ref = this.attr(item, "data-episode-ref");
+        if (!ref) throw new Error("열람 불가 회차의 식별자를 확인하지 못했어.");
+        unavailable.add(ref);
+      }
+      for (const row of doc.select("li.ep-row-v2 a.ep-row-v2-link")) {
+        const href = this.attr(row, "href");
+        const address = this.absolute(href);
+        if (!href || this.path(address).split("?")[0].indexOf(path + "/") !== 0) continue;
+        if (seen.has(address)) continue;
+        seen.add(address);
+        rows.push(row);
+      }
+      if (rows.length + unavailable.size === before && (page > 1 || expected > 0)) {
+        throw new Error("회차 목록 진행이 멈췄어 (" + page + "페이지, " + rows.length + "회차). 다시 시도해 줘.");
+      }
+      let next = null;
+      if (pager) {
+        for (const link of pager.select("a[href]")) {
+          const href = this.attr(link, "href");
+          const target = this.path(this.absolute(href));
+          const match = /[?&]epage=(\d+)(?:&|$)/.exec(target);
+          if (target.split("?")[0] !== path || !match) continue;
+          const candidate = Number(match[1]);
+          if (candidate > page && (!next || candidate < next.page)) next = {page: candidate, href};
+        }
+      }
+      if (!next) {
+        if (expected !== null && rows.length + unavailable.size !== expected) {
+          throw new Error("전체 회차 수 불일치: " + rows.length + "개, 열람 불가 " + unavailable.size + "개 / 총 " + expected + ". 목록 변경 또는 누락을 확인해 줘.");
+        }
+        return rows;
+      }
+      if (next.page !== page + 1) throw new Error("연속된 다음 회차 페이지 링크를 찾지 못했어.");
+      page = next.page;
+      try {
+        doc = await this.doc(next.href);
+      } catch (error) {
+        throw new Error("회차 " + page + "페이지를 가져오지 못했어 (" + rows.length + "회차 수신). " + String(error));
+      }
+    }
+  }
+
   async getDetail(url) {
     var path=this.path(url);
     // Follow series page rather than episode page.
@@ -124,7 +180,7 @@ class DefaultExtension extends MProvider {
     var genreEls=d.select(".hero-v2-tags a, .hero-v2-genres a, .hero-v2-genre a");
     var genres=[];
     for (var i=0;i<genreEls.length;i++) { var g=this.text(genreEls[i]); if(g) genres.push(g.replace(/^#/,"")); }
-    var rows=d.select("li.ep-row-v2 a.ep-row-v2-link");
+    var rows=await this.allChapterRows(path, d);
     const times = this.recentUploadTimes();
     var chapters=[],seen={};
     for(var j=0;j<rows.length;j++) {
